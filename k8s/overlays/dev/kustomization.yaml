@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: lab-dev
+resources:
+  - ../../base
+# Replace newName with images in a registry accessible by the EKS nodes.
+images:
+  - name: eks-debug-lab-frontend
+    newName: eks-debug-lab-frontend
+    newTag: 1.0.0
+  - name: eks-debug-lab-api
+    newName: eks-debug-lab-api
+    newTag: 1.0.0

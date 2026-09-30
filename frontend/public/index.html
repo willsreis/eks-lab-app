@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EKS Debug Lab</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow"><span class="mark">◇</span> KUBERNETES LABORATORY <span class="phase">FASE 01</span></div>
+      <h1>EKS Debug Lab<span>.</span></h1>
+      <p class="intro">Faça uma requisição. Acompanhe o caminho. Entenda o cluster.</p>
+    </header>
+    <section class="flow" aria-label="Fluxo da aplicação">
+      <span>Navegador</span><b aria-hidden="true">→</b><span>Frontend <small>Nginx</small></span><b aria-hidden="true">→</b><span>API <small>FastAPI</small></span><b aria-hidden="true">→</b><span>Redis <small>Cache</small></span>
+    </section>
+    <div class="section-title"><h2>Estado da aplicação</h2><span id="connection" role="status">Aguardando resposta</span></div>
+    <section class="metrics" aria-label="Informações da API">
+      <article><h3>STATUS DA API</h3><strong id="api-status">—</strong></article>
+      <article><h3>REDIS</h3><strong id="redis-status">—</strong></article>
+      <article><h3>REQUESTS NO POD</h3><strong id="requests">—</strong></article>
+      <article><h3>VERSÃO DA API</h3><strong id="version">—</strong></article>
+    </section>
+    <section class="details" aria-label="Identidade da resposta">
+      <div><span>Pod da API</span><code id="hostname">—</code></div>
+      <div><span>Namespace</span><code id="namespace">—</code></div>
+      <div><span>Horário da resposta</span><code id="timestamp">—</code></div>
+    </section>
+    <section class="experiment">
+      <div class="section-title"><h2>Experimente uma requisição</h2><span>01 — 04</span></div>
+      <p>Observe o status HTTP e o JSON retornado por cada endpoint.</p>
+      <div class="actions">
+        <button data-endpoint="/api/info" class="primary">Normal Request <span>↗</span></button>
+        <button data-endpoint="/api/error">Generate Error <span>500</span></button>
+        <button data-endpoint="/api/slow?seconds=3">Slow Request <span>3s</span></button>
+        <button data-endpoint="/api/cache">Redis Test <span>+1</span></button>
+      </div>
+      <div class="terminal">
+        <div class="terminal-bar"><code id="endpoint">GET /api/info</code><span id="http-status" role="status">Pronto</span></div>
+        <pre id="response" aria-live="polite">Aguardando a primeira requisição…</pre>
+      </div>
+      <p class="hint">Requests são contados por Pod. Redis Test incrementa um contador compartilhado entre as réplicas. Os cartões mostram a última consulta a /api/info.</p>
+    </section>
+    <footer><span><i></i> Acesso local · port-forward</span><span>HTML + Nginx / FastAPI / Redis</span></footer>
+  </main>
+</body>
+</html>

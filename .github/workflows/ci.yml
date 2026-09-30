@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Tests and manifests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Install test dependencies
+        run: python -m pip install -r api/requirements-dev.txt -r scripts/requirements.txt
+      - name: Install kubectl (no cluster connection)
+        run: bash scripts/ci/install-kubectl.sh
+      - name: API tests
+        run: PYTHONPATH=api python -m pytest -q api/tests/test_api.py
+      - name: Deployment rendering tests
+        run: python -m unittest discover -s scripts/tests -v
+      - name: Render base and dev overlay
+        run: |
+          kubectl kustomize k8s/base > /tmp/base.yaml
+          kubectl kustomize k8s/overlays/dev > /tmp/dev.yaml
+          for script in scripts/*.sh scripts/ci/*.sh; do bash -n "$script"; done
+          sh -n frontend/entrypoint.sh
+
+  containers:
+    name: Docker build and integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate Dockerfiles and build images
+        run: |
+          docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          docker build --check frontend
+          docker build --check api
+          docker build -t eks-debug-lab-frontend:1.0.0 frontend
+          docker build -t eks-debug-lab-api:1.0.0 api
+      - name: Frontend → API → Redis
+        run: bash scripts/ci/smoke-docker.sh

@@ -1,0 +1,43 @@
+# Applied once by an administrator, never by the application deployment workflow.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eks-lab-app-deployer
+  namespace: lab-dev
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, patch, update]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch, create, patch, update]
+  - apiGroups: [apps]
+    resources: [replicasets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods, events]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [pods/portforward]
+    # WebSocket handshake uses GET; Kubernetes 1.35 also checks CREATE.
+    verbs: [get, create]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eks-lab-app-deployer
+  namespace: lab-dev
+subjects:
+  - kind: Group
+    name: eks-lab-app-deployers
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: eks-lab-app-deployer
+  apiGroup: rbac.authorization.k8s.io

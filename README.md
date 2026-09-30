@@ -1,12 +1,16 @@
-# eks-debug-lab-app
+# eks-lab-app
 
 Primeira fase de um laboratório para estudar EKS, troubleshooting e DevOps.
 Frontend estático + FastAPI + Redis, acessados exclusivamente por `kubectl port-forward`.
-O projeto fica diretamente em `sites/01`; Git ainda não foi inicializado.
+Repositório: `willsreis/eks-lab-app`, localizado em `sites/eks-lab-app`.
 
 **Alvo:** cluster existente `eks-lab-dev`, região `us-east-1`, namespace `lab-dev`.
 A infraestrutura e seu Terraform ficam fora deste repositório. O cluster está desligado;
 o deploy e a validação real no EKS serão feitos quando ele estiver disponível.
+
+**CI/CD preparado:** consulte [Deploy com GitHub Actions, ECR e OIDC](docs/github-actions-eks.md)
+para configurar as roles, variáveis, runner e acesso ao namespace. O CI roda sem AWS em PRs/pushes;
+publicação e deploy são manuais, com deploy desabilitado por padrão enquanto o cluster está desligado.
 
 ## Arquitetura
 
@@ -35,7 +39,7 @@ não precisa resolver nomes Kubernetes nem usar CORS.
 Todos os Services são `ClusterIP`. O único objeto com escopo global é o Namespace solicitado.
 Os controladores criam ReplicaSets, Pods e EndpointSlices automaticamente.
 Não há LoadBalancer, Ingress, Gateway, TLS, PVC, StatefulSet, HPA, NetworkPolicy,
-instrumentação OpenTelemetry, stack de observabilidade ou pipeline de deploy.
+instrumentação OpenTelemetry ou stack de observabilidade. O pipeline de deploy é descrito no guia acima.
 
 ## Estrutura
 
@@ -43,6 +47,10 @@ instrumentação OpenTelemetry, stack de observabilidade ou pipeline de deploy.
 .
 ├── README.md
 ├── .gitignore
+├── .github/workflows/{ci.yml,deploy.yml}
+├── docs/
+│   ├── github-actions-eks.md
+│   └── aws/{github-trust-policy.json,publish-policy.json,deploy-policy.json}
 ├── frontend/
 │   ├── Dockerfile
 │   ├── .dockerignore
@@ -57,6 +65,7 @@ instrumentação OpenTelemetry, stack de observabilidade ou pipeline de deploy.
 │   ├── app/{__init__.py,main.py}
 │   └── tests/{test_api.py,smoke.py}
 ├── k8s/
+│   ├── bootstrap/github-actions-rbac.yaml
 │   ├── base/
 │   │   ├── namespace.yaml
 │   │   ├── kustomization.yaml
@@ -64,7 +73,12 @@ instrumentação OpenTelemetry, stack de observabilidade ou pipeline de deploy.
 │   │   ├── api/{deployment.yaml,service.yaml,kustomization.yaml}
 │   │   └── redis/{deployment.yaml,service.yaml,kustomization.yaml}
 │   └── overlays/dev/kustomization.yaml
-└── scripts/{deploy.sh,destroy.sh,status.sh,port-forward.sh}
+└── scripts/
+    ├── {deploy.sh,destroy.sh,status.sh,port-forward.sh}
+    ├── render-deploy.py
+    ├── requirements.txt
+    ├── tests/test_render_deploy.py
+    └── ci/{install-kubectl.sh,smoke-docker.sh,smoke-eks.sh}
 ```
 
 ## Conceitos utilizados
@@ -157,12 +171,16 @@ Pré-requisitos: Docker, Bash, `kubectl` com Kustomize integrado. Python 3.13+ p
 Na raiz do projeto:
 
 ```bash
-cd /home/wsr/my_projects/sites/01
+cd /home/wsr/my_projects/sites/eks-lab-app
 docker build -t eks-debug-lab-frontend:1.0.0 ./frontend
 docker build -t eks-debug-lab-api:1.0.0 ./api
 ```
 
 ## Preparar imagens para o EKS
+
+Para o fluxo automatizado, use o [guia das Actions](docs/github-actions-eks.md), que publica frontend
+e API no ECR existente `eks-lab-dev/app` e aplica os digests sem editar o overlay versionado.
+Os comandos abaixo são uma alternativa de publicação **manual** pelo Docker Hub.
 
 **Construir localmente não disponibiliza imagens nos nós EKS.** Antes do deploy, publique as duas
 imagens em um registry acessível pelos nós e configure seus nomes no overlay. Nenhum script cria ECR.
@@ -377,4 +395,5 @@ todo o seu conteúdo, incluindo recursos criados fora deste projeto. Por isso n�
 - [Kustomize no kubectl](https://kubernetes.io/docs/tasks/manage-kubernetes-objects/kustomization/)
 - [Downward API](https://kubernetes.io/docs/concepts/workloads/pods/downward-api/)
 
-Esta entrega termina na fase 1. Os componentes e experimentos das fases seguintes não foram adicionados.
+A aplicação mantém o escopo da fase 1. Foi adicionado CI/CD a pedido; os demais componentes
+e experimentos das fases seguintes continuam fora do projeto.

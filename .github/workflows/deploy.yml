@@ -1,0 +1,197 @@
+name: Publish images and deploy EKS
+run-name: Publish ${{ github.sha }} · deploy=${{ inputs.deploy }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Apply to EKS after publishing (requires EKS_DEPLOY_ENABLED=true)
+        type: boolean
+        default: false
+      platforms:
+        description: Node architecture(s)
+        type: choice
+        default: linux/amd64
+        options:
+          - linux/amd64
+          - linux/arm64
+          - linux/amd64,linux/arm64
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eks-lab-app-dev
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  publish:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'eks-lab-dev/app' }}
+      PUBLISH_ROLE: ${{ vars.AWS_PUBLISH_ROLE_ARN }}
+      DEPLOY_REQUESTED: ${{ inputs.deploy }}
+      DEPLOY_ENABLED: ${{ vars.EKS_DEPLOY_ENABLED }}
+      DEPLOY_ROLE: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      RUNNER_LABELS: ${{ vars.DEPLOY_RUNNER_LABELS }}
+    outputs:
+      frontend_image: ${{ steps.images.outputs.frontend_image }}
+      api_image: ${{ steps.images.outputs.api_image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate configuration before AWS authentication
+        shell: bash
+        run: |
+          [[ "$AWS_ACCOUNT_ID" =~ ^[0-9]{12}$ ]] || { echo 'Set AWS_ACCOUNT_ID'; exit 1; }
+          [[ "$PUBLISH_ROLE" == "arn:aws:iam::$AWS_ACCOUNT_ID:role/"* ]] || { echo 'Set AWS_PUBLISH_ROLE_ARN'; exit 1; }
+          [[ "$ECR_REPOSITORY" =~ ^[a-z0-9][a-z0-9._/-]*$ ]] || { echo 'Invalid ECR_REPOSITORY'; exit 1; }
+          if [[ "$DEPLOY_REQUESTED" == true ]]; then
+            [[ "$DEPLOY_ENABLED" == true ]] || { echo 'Deploy disabled: set EKS_DEPLOY_ENABLED=true only when EKS is available.'; exit 1; }
+            [[ "$DEPLOY_ROLE" == "arn:aws:iam::$AWS_ACCOUNT_ID:role/"* ]] || { echo 'Set AWS_DEPLOY_ROLE_ARN'; exit 1; }
+            printf '%s' "$RUNNER_LABELS" | jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' >/dev/null
+          fi
+      - name: Authenticate to AWS using OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PUBLISH_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          unset-current-credentials: true
+          role-session-name: eks-app-publish-${{ github.run_id }}
+      - name: Locate existing ECR repository and authenticate Docker
+        id: registry
+        shell: bash
+        run: |
+          registry="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+          aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" --region "$AWS_REGION" >/dev/null
+          aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$registry"
+          echo "repository=$registry/$ECR_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "tag=$GITHUB_SHA-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Publish frontend
+        id: frontend
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./frontend
+          push: true
+          platforms: ${{ inputs.platforms }}
+          tags: ${{ steps.registry.outputs.repository }}:frontend-${{ steps.registry.outputs.tag }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+      - name: Publish API
+        id: api
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ./api
+          push: true
+          platforms: ${{ inputs.platforms }}
+          tags: ${{ steps.registry.outputs.repository }}:api-${{ steps.registry.outputs.tag }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+      - name: Record immutable image references
+        id: images
+        env:
+          REPOSITORY: ${{ steps.registry.outputs.repository }}
+          FRONTEND_DIGEST: ${{ steps.frontend.outputs.digest }}
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+        run: |
+          echo "frontend_image=$REPOSITORY@$FRONTEND_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "api_image=$REPOSITORY@$API_DIGEST" >> "$GITHUB_OUTPUT"
+          {
+            echo '### Published images'
+            echo "Frontend: $REPOSITORY@$FRONTEND_DIGEST"
+            echo "API: $REPOSITORY@$API_DIGEST"
+            echo "Source commit: $GITHUB_SHA"
+            echo "Deploy requested: $DEPLOY_REQUESTED"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: publish
+    if: inputs.deploy && github.ref == 'refs/heads/main'
+    # Repository-level variable: this must be known before scheduling the job.
+    runs-on: ${{ fromJSON(vars.DEPLOY_RUNNER_LABELS || '["self-hosted", "linux", "x64", "eks-lab-dev"]') }}
+    timeout-minutes: 15
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: us-east-1
+      EKS_CLUSTER_NAME: eks-lab-dev
+      FRONTEND_IMAGE: ${{ needs.publish.outputs.frontend_image }}
+      API_IMAGE: ${{ needs.publish.outputs.api_image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Install local rendering tools
+        run: |
+          echo "KUBECONFIG=$RUNNER_TEMP/eks-lab-app-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.kubeconfig" >> "$GITHUB_ENV"
+          python -m pip install -r scripts/requirements.txt
+          bash scripts/ci/install-kubectl.sh
+          aws --version
+          jq --version
+      - name: Authenticate deploy role using OIDC
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+          allowed-account-ids: ${{ vars.AWS_ACCOUNT_ID }}
+          unset-current-credentials: true
+          role-session-name: eks-app-deploy-${{ github.run_id }}
+      - name: Check cluster, connectivity and namespace access
+        id: cluster
+        run: |
+          status=$(aws eks describe-cluster --name "$EKS_CLUSTER_NAME" --query 'cluster.status' --output text)
+          [[ "$status" == ACTIVE ]] || { echo "Cluster is not ACTIVE: $status"; exit 1; }
+          aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --kubeconfig "$KUBECONFIG"
+          kubectl get deployments -n lab-dev --request-timeout=15s
+          kubectl auth can-i create deployments.apps -n lab-dev --quiet
+          kubectl auth can-i patch services -n lab-dev --quiet
+      - name: Render exact image digests (namespace provisioned separately)
+        run: |
+          python scripts/render-deploy.py --frontend-image "$FRONTEND_IMAGE" --api-image "$API_IMAGE" > "$RUNNER_TEMP/eks-lab-app.yaml"
+      - name: Save rendered manifests
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: eks-lab-app-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/eks-lab-app.yaml
+          retention-days: 7
+          if-no-files-found: error
+      - name: Validate with API server and apply
+        run: |
+          kubectl apply --dry-run=server -n lab-dev -f "$RUNNER_TEMP/eks-lab-app.yaml" --request-timeout=30s
+          kubectl apply -n lab-dev -f "$RUNNER_TEMP/eks-lab-app.yaml" --request-timeout=30s
+          for component in redis api frontend; do
+            kubectl rollout status "deployment/$component" -n lab-dev --timeout=180s
+          done
+      - name: Smoke test via local port-forward
+        run: bash scripts/ci/smoke-eks.sh
+      - name: Diagnose failed deployment
+        if: failure() && steps.cluster.outcome == 'success'
+        run: |
+          kubectl get deployments,replicasets,pods,services,endpointslices -n lab-dev -o wide --request-timeout=15s || true
+          kubectl get events -n lab-dev --sort-by=.metadata.creationTimestamp --request-timeout=15s || true
+          kubectl logs -n lab-dev -l app.kubernetes.io/part-of=eks-debug-lab-app --all-containers --prefix --tail=50 --max-log-requests=5 --request-timeout=15s || true
+      - name: Remove temporary kubeconfig
+        if: always()
+        run: |
+          if [[ -n "${KUBECONFIG:-}" ]]; then rm -f -- "$KUBECONFIG"; fi

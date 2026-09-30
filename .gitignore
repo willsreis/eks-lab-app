@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+.env
+.env.*
+!.env.example
+rendered.yaml
+*.kubeconfig
+k8s/overlays/.deploy-*/
+.DS_Store
